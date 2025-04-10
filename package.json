@@ -1,0 +1,141 @@
+{
+  "name": "remote-ftp-vscode",
+  "displayName": "Remote FTP",
+  "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
+  "version": "0.0.1",
+  "publisher": "andriy063",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:remote-ftp-vscode"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "remoteFtp.refresh",
+        "title": "🔁 Reload Remote FTP Config"
+      },
+      {
+        "command": "remoteFtp.openFile",
+        "title": "📄 Open Remote File"
+      },
+      {
+        "command": "remoteFtp.download",
+        "title": "📥 Download to Local"
+      },
+      {
+        "command": "remoteFtp.newFile",
+        "title": "📄 New File",
+        "priority": 100
+      },
+      {
+        "command": "remoteFtp.newFolder",
+        "title": "📁 New Folder"
+      },
+      {
+        "command": "remoteFtp.uploadFiles",
+        "title": "⬆️ Upload File(s)"
+      },
+      {
+        "command": "remoteFtp.deleteRemoteFile",
+        "title": "❌ Remove",
+        "priority": 1
+      },
+      {
+        "command": "remoteFtp.changePermissions",
+        "title": "🔧 Change Permissions"
+      },
+      {
+        "command": "remoteFtp.copyRemotePath",
+        "title": "🧷 Copy Path"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "remote-ftp-vscode",
+          "name": "Remote FTP",
+          "icon": "./images/icon.png",
+          "priority": 100
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "remoteFtp.refresh",
+          "when": "view == remote-ftp-vscode",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "remoteFtp.download",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.newFile",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.newFolder",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.uploadFiles",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.changePermissions",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.deleteRemoteFile",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        },
+        {
+          "command": "remoteFtp.copyRemotePath",
+          "when": "view == remote-ftp-vscode",
+          "group": "ftp"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "build": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/ssh2-sftp-client": "^9.0.4",
+    "@types/vscode": "^1.99.0",
+    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/parser": "^8.28.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "basic-ftp": "^4.6.0",
+    "eslint": "^9.23.0",
+    "ssh2": "^0.8.9",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "ssh2-sftp-client": "^12.0.0"
+  }
+}
