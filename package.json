@@ -2,7 +2,7 @@
   "name": "remote-ftp-vscode",
   "displayName": "Remote FTP (Atom-like) [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "andriy063",
   "engines": {
     "vscode": "^1.70.0"
@@ -136,16 +136,15 @@
     "@typescript-eslint/parser": "^8.28.0",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1",
-    "basic-ftp": "^4.6.0",
     "eslint": "^9.23.0",
     "ssh2": "^0.8.9",
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "ssh2-sftp-client": "^12.0.0",
-    "basic-ftp": "^4.6.0",
+    "basic-ftp": "^5.0.5",
     "eslint": "^9.23.0",
     "ssh2": "^0.8.9",
+    "ssh2-sftp-client": "^12.0.0",
     "typescript": "^5.8.2"
   }
 }

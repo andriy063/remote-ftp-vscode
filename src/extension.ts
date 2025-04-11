@@ -571,6 +571,7 @@ class RemoteFTPProvider implements vscode.TreeDataProvider<TreeItem> {
 
         if (item.parentHost.protocol === 'ftp') {
             vscode.window.showErrorMessage('Changing permissions not supported over FTP');
+            console.log('err');
             return;
         }
 

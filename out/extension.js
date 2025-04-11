@@ -527,6 +527,7 @@ class RemoteFTPProvider {
             return;
         if (item.parentHost.protocol === 'ftp') {
             vscode.window.showErrorMessage('Changing permissions not supported over FTP');
+            console.log('err');
             return;
         }
         const client = new ssh2_sftp_client_1.default();
