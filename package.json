@@ -2,7 +2,7 @@
   "name": "remote-ftp-vscode",
   "displayName": "Remote FTP (Atom-like) [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.0.3",
+  "version": "0.0.35",
   "publisher": "andriy063",
   "engines": {
     "vscode": "^1.70.0"
@@ -10,6 +10,8 @@
   "categories": [
     "Other"
   ],
+  "icon": "res/images/logo.png",
+  "homepage": "https://sitemkr.pro/?from=remote-ftp-vscode",
   "repository": {
     "type": "git",
     "url": "https://github.com/andriy063/remote-ftp-vscode.git"
