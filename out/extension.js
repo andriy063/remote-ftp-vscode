@@ -48,6 +48,7 @@ function activate(context) {
     vscode.window.registerTreeDataProvider('remote-ftp-vscode', provider);
     context.subscriptions.push(vscode.commands.registerCommand('remoteFtp.refresh', () => provider.refresh()), vscode.commands.registerCommand('remoteFtp.openFile', item => provider.openRemoteFile(item)), vscode.commands.registerCommand('remoteFtp.download', item => provider.downloadToLocal(item)), vscode.commands.registerCommand('remoteFtp.newFile', item => provider.createNewFile(item)), vscode.commands.registerCommand('remoteFtp.newFolder', item => provider.createNewFolder(item)), vscode.commands.registerCommand('remoteFtp.uploadFiles', item => provider.uploadFiles(item)), vscode.commands.registerCommand('remoteFtp.uploadFolder', item => provider.uploadFolder(item)), vscode.commands.registerCommand('remoteFtp.changePermissions', item => provider.changePermissions(item)), vscode.commands.registerCommand('remoteFtp.deleteRemoteFile', item => provider.deleteRemoteFile(item)), vscode.commands.registerCommand('remoteFtp.copyRemotePath', item => provider.copyRemotePathToClipboard(item)), vscode.workspace.onDidSaveTextDocument(doc => provider.uploadEditedFile(doc)));
 }
+// ...
 class RemoteFTPProvider {
     _onDidChangeTreeData = new vscode.EventEmitter();
     onDidChangeTreeData = this._onDidChangeTreeData.event;

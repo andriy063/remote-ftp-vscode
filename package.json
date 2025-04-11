@@ -2,7 +2,7 @@
   "name": "remote-ftp-vscode",
   "displayName": "Remote FTP (Atom-like) [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.0.35",
+  "version": "0.0.4",
   "publisher": "andriy063",
   "engines": {
     "vscode": "^1.70.0"

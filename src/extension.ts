@@ -45,6 +45,8 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
+// ...
+
 class RemoteFTPProvider implements vscode.TreeDataProvider<TreeItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<TreeItem | undefined>();
     onDidChangeTreeData = this._onDidChangeTreeData.event;
