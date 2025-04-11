@@ -142,6 +142,10 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "ssh2-sftp-client": "^12.0.0"
+    "ssh2-sftp-client": "^12.0.0",
+    "basic-ftp": "^4.6.0",
+    "eslint": "^9.23.0",
+    "ssh2": "^0.8.9",
+    "typescript": "^5.8.2"
   }
 }
