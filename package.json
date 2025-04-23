@@ -6,6 +6,10 @@
   "engines": {
     "vscode": "^1.80.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andriy063/remote-ftp-vscode.git"
+  },
   "categories": [
     "Other"
   ],
@@ -138,7 +142,7 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
     "@types/ssh2-sftp-client": "^9.0.4",
-    "@types/vscode": "^1.99.0",
+    "@types/vscode": "^1.80.0",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
     "@vscode/test-cli": "^0.0.10",

@@ -11,45 +11,37 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
 - 📄 Open remote files for editing
 - 💾 Automatic upload on save
 - 📥 Download individual files or entire folders
-- 🧹 Skip downloading unchanged files (based on file size)
-- 🔁 Reload server list
-- ⚙️ Ignore file extensions (configurable)
+- 📦 Local auto backup (changed files in `rsftpbackups` folder)
 
 ---
 
 ## 🚀 Getting Started
 
 1. **Open a workspace** folder in VS Code.
-2. Create a config file (`config.json`) in the root of your project
+2. Create a config file (`rsftpconfig.json`) in the root of your project
    ```json
    {
-     "hosts": [
-       {
-         "name": "My SFTP Server",
-         "protocol": "sftp",
-         "host": "example.com",
-         "port": 22,
-         "username": "user",
-         "password": "pass",
-         "remotePath": "/home/user",
-         "ignoreExtensions": [".log", ".tmp"],
-         "ignorePaths": ["node_modules", "tmp/cache"],
-         "workers": 1
-       },
-       {
-         "name": "My FTP Server",
-         "protocol": "ftp",
-         "host": "example.com",
-         "port": 21,
-         "username": "user",
-         "password": "pass",
-         "remotePath": "/home/user",
-         "ignoreExtensions": [".log", ".tmp"],
-         "ignorePaths": ["node_modules", "tmp/cache"],
-         "workers": 1
-       }
-     ]
-   }
+      "hosts": {
+        "host_1": {
+          "protocol": "ftp",
+          "host": "ftp.demo.ca",
+          "port": 21,
+          "username": "demo@demo.ca",
+          "password": "pwd",
+          "remote_path": "/",
+          "workers": 9
+        },
+        "somesftphost": {
+          "protocol": "sftp",
+          "host": "111.245.177.28",
+          "port": 22,
+          "username": "user",
+          "password": "pwd",
+          "remote_path": "/",
+          "workers": 9
+        },
+      }
+    }
    ```
 3. Open the **Remote FTP** panel in the Explorer view.
 4. Click to expand a host, browse files, and start editing or downloading!
@@ -60,19 +52,23 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
 
 Right-click any file or folder in the tree to:
 
-- 📥 **Download to Local** – downloads selected item to `localPath`
-- 📄 **Open** – opens and edits the file with auto-upload on save
+- **Download** – downloads selected item to workspace folder (HOSTNAME/externalfolder/file.txt)
+- **Delete** – external and local file or folder
+- **Copy remote Path**
+- **Run chmod**
+- **Rename**
+- **Upload file(s)/folder**
+- **New folder/file**
 
 ---
 
 ## 🧩 Requirements
 
-- Node.js ≥ 16
-- VS Code ≥ 1.70
+- VS Code ≥ 1.80
 - Internet connection to access remote servers
 
 ---
 
 ## 📃 License
 
-MIT © 2024 andriy063
+MIT © 2025 andriy063
