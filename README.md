@@ -10,7 +10,7 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
 - 🔒 Support for both **FTP** and **SFTP**
 - 📄 Open remote files for editing
 - 💾 Automatic upload on save
-- 📥 Download individual files or entire folders
+- 📥 Download individual files or entire folders (change `workers` in config to increase the threads, i.e. to increase the loading speed)
 - 📦 Local auto backup (changed files in `rsftpbackups` folder)
 
 ---
@@ -29,7 +29,7 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
           "username": "demo@demo.ca",
           "password": "pwd",
           "remote_path": "/",
-          "workers": 9
+          "workers": 1
         },
         "somesftphost": {
           "protocol": "sftp",
@@ -38,7 +38,7 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
           "username": "user",
           "password": "pwd",
           "remote_path": "/",
-          "workers": 9
+          "workers": 1
         },
       }
     }

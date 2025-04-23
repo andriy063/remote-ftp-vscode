@@ -226,7 +226,7 @@ async function renameCommand(item: RemoteItem) {
   const oldRemote = item.data.fullPath;
   const oldName = path.posix.basename(oldRemote);
   const newName = await vscode.window.showInputBox({
-    prompt: `Rename '${oldName}' to…`,
+    prompt: `Rename '${oldName}' to...`,
     value: oldName
   });
   if (!newName || newName === oldName) return;

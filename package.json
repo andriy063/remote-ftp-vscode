@@ -1,8 +1,9 @@
 {
-  "name": "remote-sftp",
-  "displayName": "Remote SFTP",
+  "name": "remote-ftp-vscode",
+  "displayName": "Remote FTP [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.8.0",
+  "version": "0.1.0",
+  "publisher": "andriy063",
   "engines": {
     "vscode": "^1.80.0"
   },
