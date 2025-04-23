@@ -2,7 +2,7 @@
   "name": "remote-sftp",
   "displayName": "Remote SFTP",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.0.1",
+  "version": "0.8.0",
   "engines": {
     "vscode": "^1.80.0"
   },
