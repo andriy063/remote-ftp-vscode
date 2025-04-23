@@ -32,8 +32,21 @@ Easily browse, open, edit and download files or folders from remote FTP or SFTP 
          "username": "user",
          "password": "pass",
          "remotePath": "/home/user",
-         "localPath": "./downloads",
-         "ignoreExtensions": [".log", ".tmp"]
+         "ignoreExtensions": [".log", ".tmp"],
+         "ignorePaths": ["node_modules", "tmp/cache"],
+         "workers": 1
+       },
+       {
+         "name": "My FTP Server",
+         "protocol": "ftp",
+         "host": "example.com",
+         "port": 21,
+         "username": "user",
+         "password": "pass",
+         "remotePath": "/home/user",
+         "ignoreExtensions": [".log", ".tmp"],
+         "ignorePaths": ["node_modules", "tmp/cache"],
+         "workers": 1
        }
      ]
    }
