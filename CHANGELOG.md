@@ -1,9 +1,7 @@
-# Change Log
-
-All notable changes to the "remote-ftp-vscode" extension will be documented in this file.
-
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
-
 ## [Unreleased]
 
 - Initial release
+
+## [0.3.0] - 2025-09-05
+### Fixed
+- Fixed a bug where the FTP connection timed out too quickly, causing it to disconnect earlier than expected.

@@ -29,11 +29,13 @@ interface HostConfig {
   timeoutMs?: number; // тайм-аут на файл
 }
 
+
 /* ------------------------------------------------------------------
  *  Global state
  * ---------------------------------------------------------------- */
 const rsftp: Record<string, unknown> = {};
 const sessions = new Map<string, RemoteClient>();
+const connecting = new Map<string, Promise<RemoteClient>>();
 const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.tmpdir();
 
 class RemoteSftpProvider implements vscode.TreeDataProvider<RemoteItem> {
@@ -66,7 +68,7 @@ class RemoteSftpProvider implements vscode.TreeDataProvider<RemoteItem> {
 
     // директорія
     if (element.type === "host" || element.type === "dir") {
-      const client = sessions.get(element.data.host);
+      const client = await getHealthyClientForHost(element.data.host);
       if (!client) return [];
       return listRemote(client, element.data.fullPath, element.data.host);
     }
@@ -340,11 +342,17 @@ async function deleteCommand(item: RemoteItem) {
     } else {
       // папка
       if (client instanceof SftpClient) {
-        await client.rmdir(remote, true);       // рекурсивно
+        try {
+          await (client as any).rmdir(item.data.fullPath, true);                 // v8–v9
+        } catch {
+          await (client as any).rmdir(item.data.fullPath, { recursive: true });  // v10+
+        }
       } else {
-        await (client as FtpClient).removeDir(remote);
+        await (client as FtpClient).removeDir(item.data.fullPath);
       }
     }
+
+
 
     // 3) видалити локальну копію
     const local = toLocalPath(item.data.host, remote);
@@ -467,7 +475,7 @@ async function uploadFolderCommand(item: RemoteItem) {
 
 async function openFileCommand(item: RemoteItem) {
   if (item.type !== "file") return;
-  const client = sessions.get(item.data.host);
+  const client = await getHealthyClientForHost(item.data.host);
   if (!client) {
     vscode.window.showWarningMessage(`Not connected to ${item.data.host}`);
     return;
@@ -577,6 +585,7 @@ async function uploadCommand(item: RemoteItem) {
         return;
       }
 
+
       // директорія
       progress.report({ message: "Scanning local directory…" });
       const files = await collectLocalFiles(baseLocal, token);
@@ -605,6 +614,43 @@ function isFtpAlive(c: FtpClient): boolean {
   return !!sock && sock.destroyed === false;
 }
 
+
+// заміна/додавання getHealthyClientForHost з дедуплікацією
+async function getHealthyClientForHost(host: string): Promise<RemoteClient | undefined> {
+  const cfg = cfgFor(host);
+  if (!cfg?.host) return undefined;
+
+  let client = sessions.get(host) as RemoteClient | undefined;
+
+  // якщо FTP і сокет мертвий — закриваємо і забираємо з кешу
+  if (client && cfg.protocol === "ftp" && client instanceof FtpClient && !isFtpAlive(client)) {
+    try { await disconnectClient(client); } catch { }
+    sessions.delete(host);
+    client = undefined;
+  }
+
+  if (client) return client;
+
+  // дедуплікуємо одночасні підключення до одного хоста
+  let inFlight = connecting.get(host);
+  if (!inFlight) {
+    inFlight = (async () => {
+      const c = await connectToHost(cfg);
+      sessions.set(host, c);
+      return c;
+    })();
+    connecting.set(host, inFlight);
+  }
+
+  try {
+    return await inFlight;
+  } finally {
+    connecting.delete(host);
+  }
+}
+
+
+
 async function handleSave(doc: vscode.TextDocument) {
   const rel = path.relative(workspaceRoot, doc.fileName);
   const [host, ...rest] = rel.split(path.sep);
@@ -616,16 +662,13 @@ async function handleSave(doc: vscode.TextDocument) {
 
   await createBackup(localPath, remotePath, host);
 
-  // ✅ Використовуємо кеш, але якщо це FTP і він «мертвий» — перепід’єднуємось і оновлюємо sessions
-  let client = sessions.get(host) as RemoteClient | undefined;
-  if (client && cfg.protocol === "ftp" && client instanceof FtpClient && !isFtpAlive(client)) {
-    try { await disconnectClient(client); } catch { }
+  // беремо здоровий кешований клієнт; якщо з якихось причин немає — тимчасово підключаємось
+  let client = await getHealthyClientForHost(host);
+  let tempClient = false;
+  if (!client) {
     client = await connectToHost(cfg);
-    sessions.set(host, client);
+    tempClient = true;
   }
-  // якщо кешу нема — тимчасове підключення
-  const tempClient = !client;
-  if (!client) client = await connectToHost(cfg);
 
   try {
     await uploadFileWithRetry(
@@ -640,10 +683,10 @@ async function handleSave(doc: vscode.TextDocument) {
       }
     );
   } finally {
-    // Закриваємо лише тимчасове з’єднання
-    if (tempClient && client) await disconnectClient(client);
+    if (tempClient) await disconnectClient(client);
   }
 }
+
 
 
 // Функція для створення резервної копії
@@ -698,6 +741,8 @@ function getFileNameWithDate(localFilePath: string): string {
 
   return newFileName;
 }
+
+
 
 
 /* ------------------------------------------------------------------
@@ -1041,8 +1086,17 @@ function getConfig(): any {
 }
 
 async function disconnectClient(c: RemoteClient) {
-  if (c instanceof SftpClient) c.end();
-  else (c as FtpClient).close();
+  try {
+    if (c instanceof SftpClient) {
+      await c.end();                 // було: c.end()
+    } else {
+      const ftp = c as FtpClient;
+      // close() у basic-ftp може бути sync, await не нашкодить
+      await (ftp.close() as any);
+    }
+  } catch { /* ignore */ }
 }
+
+
 
 // ===== End of extension.ts =====
