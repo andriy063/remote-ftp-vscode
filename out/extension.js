@@ -83,7 +83,7 @@ class RemoteSftpProvider {
 }
 const provider = new RemoteSftpProvider();
 /* ------------------------------------------------------------------
- *  Activate / deactivate
+ *  Activate / deactivate
  * ---------------------------------------------------------------- */
 function activate(ctx) {
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -149,8 +149,8 @@ class RemoteItem extends vscode.TreeItem {
         }
     }
 }
-// --- кінець Part 1 / 3 ---
-// extension.ts  –  PART 2 / 3
+// --- кінець Part 1 / 3 ---
+// extension.ts  –  PART 2 / 3
 // (Commands + retry/timeout helpers)
 /* ------------------------------------------------------------------
  *  Commands
@@ -372,7 +372,7 @@ async function uploadFolderCommand(item) {
     });
     if (!uris || uris.length === 0)
         return;
-    // 2) Готуємо список завдань: для кожної папки — список файлів + remote‑шлях
+    // 2) Готуємо список завдань: для кожної папки — список файлів + remote-шлях
     const jobs = [];
     const cfg = cfgFor(item.data.host);
     const remoteBase = item.data.fullPath;
@@ -438,13 +438,26 @@ async function downloadCommand(item) {
     }, async (progress, token) => {
         // одиночний файл
         if (item.type === "file") {
-            await downloadFile(await connectToHost(cfg), item.data.fullPath, baseLocal, cfg, token);
+            const client = await connectToHost(cfg);
+            try {
+                await downloadFile(client, item.data.fullPath, baseLocal, cfg, token);
+            }
+            finally {
+                await disconnectClient(client);
+            }
             return;
         }
         // директорія
         progress.report({ message: "Scanning 0 files…" });
-        // передаємо onProgress, який оновлює лічильник знайдених файлів
-        const files = await collectRemoteFiles(await connectToHost(cfg), item.data.fullPath, token, (count) => progress.report({ message: `Scanning ${count} files…` }));
+        // створюємо окремий клієнт для сканування і закриваємо після
+        const scanClient = await connectToHost(cfg);
+        let files = [];
+        try {
+            files = await collectRemoteFiles(scanClient, item.data.fullPath, token, (count) => progress.report({ message: `Scanning ${count} files…` }));
+        }
+        finally {
+            await disconnectClient(scanClient);
+        }
         progress.report({ message: `Found ${files.length} files` });
         await downloadMany({ host: item.data.host, cfg }, files, workers, token, (d, t) => progress.report({ message: `Downloading… ${d}/${t}` }));
     });
@@ -461,7 +474,13 @@ async function uploadCommand(item) {
     }, async (progress, token) => {
         // одиночний файл
         if (item.type === "file") {
-            await uploadFileWithRetry(await connectToHost(cfg), baseLocal, item.data.fullPath, cfg, token);
+            const client = await connectToHost(cfg);
+            try {
+                await uploadFileWithRetry(client, baseLocal, item.data.fullPath, cfg, token);
+            }
+            finally {
+                await disconnectClient(client);
+            }
             return;
         }
         // директорія
@@ -472,29 +491,47 @@ async function uploadCommand(item) {
     });
     vscode.window.showInformationMessage(`Upload complete → ${item.data.host}:${item.data.fullPath}`);
 }
+function isFtpAlive(c) {
+    // basic-ftp зберігає Socket у client.ftp.socket
+    const sock = c?.ftp?.socket;
+    return !!sock && sock.destroyed === false;
+}
 async function handleSave(doc) {
     const rel = path.relative(workspaceRoot, doc.fileName);
     const [host, ...rest] = rel.split(path.sep);
     if (!host || rest.length === 0)
         return;
     const cfg = cfgFor(host);
-    // Отримуємо віддалений шлях
     const remotePath = "/" + rest.join("/");
-    // Отримуємо локальний шлях
     const localPath = doc.fileName;
-    // Створення резервної копії
     await createBackup(localPath, remotePath, host);
-    // Вивантажуємо файл
-    await uploadFileWithRetry(await connectToHost(cfg), localPath, remotePath, cfg, undefined, success => {
-        if (success) {
-            vscode.window.showInformationMessage(`✅ Uploaded`);
+    // ✅ Використовуємо кеш, але якщо це FTP і він «мертвий» — перепід’єднуємось і оновлюємо sessions
+    let client = sessions.get(host);
+    if (client && cfg.protocol === "ftp" && client instanceof basic_ftp_1.Client && !isFtpAlive(client)) {
+        try {
+            await disconnectClient(client);
         }
-        else {
-            vscode.window.showInformationMessage(`❌ Failed to upload`);
-        }
-    });
-    // Виводимо повідомлення на статусній панелі
-    //vscode.window.setStatusBarMessage(`↑ ${host}:${rest.join("/")}`, 2000);
+        catch { }
+        client = await connectToHost(cfg);
+        sessions.set(host, client);
+    }
+    // якщо кешу нема — тимчасове підключення
+    const tempClient = !client;
+    if (!client)
+        client = await connectToHost(cfg);
+    try {
+        await uploadFileWithRetry(client, localPath, remotePath, cfg, undefined, success => {
+            if (success)
+                vscode.window.showInformationMessage(`✅ Uploaded`);
+            else
+                vscode.window.showInformationMessage(`❌ Failed to upload`);
+        });
+    }
+    finally {
+        // Закриваємо лише тимчасове з’єднання
+        if (tempClient && client)
+            await disconnectClient(client);
+    }
 }
 // Функція для створення резервної копії
 async function createBackup(localFilePath, remotePath, host) {
@@ -561,7 +598,7 @@ async function withRetry(fn, attempts, timeout, token) {
         }
         catch (e) {
             last = e;
-            await wait(400 * (i + 1)); // простий back‑off
+            await wait(400 * (i + 1)); // простий back-off
         }
     }
     throw last;
@@ -620,7 +657,7 @@ async function uploadFileWithRetry(client, local, remote, cfg, token, onResult) 
         throw e;
     }
 }
-// (parallel transfers · collect helpers · low‑level utils)
+// (parallel transfers · collect helpers · low-level utils)
 /* ------------------------------------------------------------------
  *  Паралельні воркери
  * ---------------------------------------------------------------- */
@@ -711,7 +748,7 @@ async function collectLocalFiles(startDir, token) {
     return files;
 }
 /* ------------------------------------------------------------------
- *  Low‑level util
+ *  Low-level util
  * ---------------------------------------------------------------- */
 function cfgFor(host) {
     return getConfig()?.hosts?.[host] ?? {};
