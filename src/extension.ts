@@ -10,7 +10,7 @@ import SftpClient from "ssh2-sftp-client";
  * ---------------------------------------------------------------- */
 interface RemoteItemData {
   host: string;
-  fullPath: string;   // posix-шлях на сервері
+  fullPath: string;
   isDir: boolean;
 }
 
@@ -24,19 +24,273 @@ interface HostConfig {
   password?: string;
   private_key?: string;
   remote_path?: string;
-  workers?: number;   // max паралельних потоків
-  retry?: number;     // спроб на файл
-  timeoutMs?: number; // тайм-аут на файл
+  workers?: number;
+  retry?: number;
+  timeoutMs?: number;
 }
 
+/* ------------------------------------------------------------------
+ *  Connection Pool - управління з'єднаннями з автоматичним recovery
+ * ---------------------------------------------------------------- */
+class ConnectionPool {
+  private pools = new Map<string, RemoteClient[]>();
+  private connecting = new Map<string, Promise<void>>();
+  private maxPerHost = 3; // максимум з'єднань на хост
+
+  /**
+   * Отримує живе з'єднання або створює нове
+   */
+  async acquire(host: string, cfg: HostConfig): Promise<RemoteClient> {
+    // Перевіряємо чи є живі з'єднання в пулі
+    const pool = this.pools.get(host) || [];
+
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const client = pool[i];
+      if (await this.isAlive(client, cfg.protocol)) {
+        // Видаляємо з пулу (borrowing pattern)
+        pool.splice(i, 1);
+        return client;
+      } else {
+        // Видаляємо мертве з'єднання
+        pool.splice(i, 1);
+        await this.safeDisconnect(client);
+      }
+    }
+
+    // Немає живих - створюємо нове
+    return await this.createConnection(host, cfg);
+  }
+
+  /**
+   * Повертає з'єднання назад в пул
+   */
+  async release(host: string, client: RemoteClient, protocol: "ftp" | "sftp") {
+    const pool = this.pools.get(host) || [];
+
+    // Перевіряємо чи живе перед поверненням
+    if (await this.isAlive(client, protocol)) {
+      // Обмежуємо розмір пулу
+      if (pool.length < this.maxPerHost) {
+        pool.push(client);
+        this.pools.set(host, pool);
+        return;
+      }
+    }
+
+    // Якщо пул переповнений або клієнт мертвий - закриваємо
+    await this.safeDisconnect(client);
+  }
+
+  /**
+   * Перевіряє чи живе з'єднання
+   */
+  private async isAlive(client: RemoteClient, protocol: "ftp" | "sftp"): Promise<boolean> {
+    try {
+      if (protocol === "ftp") {
+        const ftpClient = client as FtpClient;
+        const sock = (ftpClient as any)?.ftp?.socket;
+        if (!sock || sock.destroyed || !sock.readable || !sock.writable) {
+          return false;
+        }
+        // Простий тест: pwd
+        await Promise.race([
+          ftpClient.pwd(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("timeout")), 3000)
+          )
+        ]);
+        return true;
+      } else {
+        const sftpClient = client as SftpClient;
+        // SFTP не має простого способу перевірки, тому перевіряємо внутрішній стан
+        const sftp = (sftpClient as any).sftp;
+        const client_internal = (sftpClient as any).client;
+
+        if (!sftp || !client_internal) return false;
+
+        // Перевіряємо чи не закритий SSH клієнт
+        const sock = (client_internal as any)?._sock;
+        if (!sock || sock.destroyed || sock.readableEnded) {
+          return false;
+        }
+
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Створює нове з'єднання (з дедуплікацією)
+   */
+  private async createConnection(host: string, cfg: HostConfig): Promise<RemoteClient> {
+    // Дедуплікація: якщо вже підключаємось - чекаємо
+    const key = `${host}-connect`;
+    let inFlight = this.connecting.get(key);
+
+    if (!inFlight) {
+      inFlight = (async () => {
+        const client = await this.doConnect(cfg);
+        // Одразу після створення додаємо в пул
+        const pool = this.pools.get(host) || [];
+        pool.push(client);
+        this.pools.set(host, pool);
+      })();
+      this.connecting.set(key, inFlight);
+    }
+
+    try {
+      await inFlight;
+      // Беремо щойно створене з'єднання
+      const pool = this.pools.get(host)!;
+      return pool.pop()!;
+    } finally {
+      this.connecting.delete(key);
+    }
+  }
+
+  /**
+   * Низькорівневе підключення
+   */
+  private async doConnect(cfg: HostConfig): Promise<RemoteClient> {
+    if (cfg.protocol === "sftp") {
+      const c = new SftpClient();
+      await c.connect({
+        host: cfg.host,
+        port: cfg.port ?? 22,
+        username: cfg.username,
+        password: cfg.password,
+        privateKey: cfg.private_key && fs.readFileSync(cfg.private_key),
+        keepaliveInterval: 10000,
+        readyTimeout: cfg.timeoutMs ?? 30000
+      });
+      return c;
+    } else {
+      const c = new FtpClient();
+      await c.access({
+        host: cfg.host,
+        port: cfg.port ?? 21,
+        user: cfg.username,
+        password: cfg.password,
+      });
+      return c;
+    }
+  }
+
+  /**
+   * Безпечне відключення
+   */
+  async safeDisconnect(client: RemoteClient) {
+    try {
+      if (client instanceof SftpClient) {
+        await client.end();
+      } else {
+        await (client as FtpClient).close();
+      }
+    } catch {
+      // ігноруємо помилки при закритті
+    }
+  }
+
+  /**
+   * Очищення всіх з'єднань
+   */
+  async closeAll() {
+    for (const pool of this.pools.values()) {
+      for (const client of pool) {
+        await this.safeDisconnect(client);
+      }
+    }
+    this.pools.clear();
+    this.connecting.clear();
+  }
+
+  /**
+   * Видалення всіх з'єднань для конкретного хоста
+   */
+  async closeHost(host: string) {
+    const pool = this.pools.get(host);
+    if (pool) {
+      for (const client of pool) {
+        await this.safeDisconnect(client);
+      }
+      this.pools.delete(host);
+    }
+  }
+}
+
+const connectionPool = new ConnectionPool();
+
+/**
+ * Wrapper для операцій з автоматичним retry при падінні з'єднання
+ */
+async function withConnection<T>(
+  host: string,
+  cfg: HostConfig,
+  operation: (client: RemoteClient) => Promise<T>,
+  token?: vscode.CancellationToken
+): Promise<T> {
+  const maxAttempts = cfg.retry ?? 3;
+  let lastError: any;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
+    let client: RemoteClient | undefined;
+
+    try {
+      // Беремо з'єднання з пулу
+      client = await connectionPool.acquire(host, cfg);
+
+      // Виконуємо операцію з timeout
+      const result = await Promise.race([
+        operation(client),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Operation timeout")), cfg.timeoutMs ?? 30000)
+        )
+      ]);
+
+      // Успіх - повертаємо клієнта в пул
+      await connectionPool.release(host, client, cfg.protocol);
+      return result;
+
+    } catch (error) {
+      lastError = error;
+
+      // Якщо з'єднання впало - не повертаємо його в пул
+      if (client) {
+        await connectionPool.safeDisconnect(client);
+      }
+
+      // Якщо це cancellation - одразу кидаємо
+      if (error instanceof vscode.CancellationError) {
+        throw error;
+      }
+
+      // Інакше - чекаємо перед retry
+      if (attempt < maxAttempts - 1) {
+        await wait(500 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 /* ------------------------------------------------------------------
  *  Global state
  * ---------------------------------------------------------------- */
 const rsftp: Record<string, unknown> = {};
-const sessions = new Map<string, RemoteClient>();
-const connecting = new Map<string, Promise<RemoteClient>>();
 const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.tmpdir();
+
+// Дебаунс для запобігання подвійного відкриття файлів
+const openFileDebounce = new Map<string, number>();
+
+// Status bar для upload статусу
+let uploadStatusBar: vscode.StatusBarItem;
 
 class RemoteSftpProvider implements vscode.TreeDataProvider<RemoteItem> {
   private emitter = new vscode.EventEmitter<RemoteItem | undefined>();
@@ -52,7 +306,6 @@ class RemoteSftpProvider implements vscode.TreeDataProvider<RemoteItem> {
     const cfg = getConfig();
     if (!cfg || typeof cfg.hosts !== "object") return [];
 
-    // корінь: список хостів
     if (!element) {
       return Object.keys(cfg.hosts)
         .sort()
@@ -66,42 +319,78 @@ class RemoteSftpProvider implements vscode.TreeDataProvider<RemoteItem> {
         );
     }
 
-    // директорія
     if (element.type === "host" || element.type === "dir") {
-      const client = await getHealthyClientForHost(element.data.host);
-      if (!client) return [];
-      return listRemote(client, element.data.fullPath, element.data.host);
+      const hostCfg = cfgFor(element.data.host);
+      return await withConnection(
+        element.data.host,
+        hostCfg,
+        (client) => listRemote(client, element.data.fullPath, element.data.host)
+      );
     }
 
     return [];
   }
 }
+
 const provider = new RemoteSftpProvider();
 
+/* ------------------------------------------------------------------
+ *  Tree item
+ * ---------------------------------------------------------------- */
+class RemoteItem extends vscode.TreeItem {
+  constructor(
+    public readonly label: string,
+    state: vscode.TreeItemCollapsibleState,
+    public readonly type: "host" | "dir" | "file",
+    public readonly data: RemoteItemData
+  ) {
+    super(label, state);
+    this.contextValue = type;
 
+    const uriPath = data.fullPath.startsWith("/") ? data.fullPath : `/${data.fullPath}`;
+    this.resourceUri = vscode.Uri.parse(uriPath).with({
+      scheme: "rsftp",
+      authority: data.host,
+    });
+
+    if (type === "file") {
+      this.command = {
+        command: "remote-sftp.openFile",
+        title: "Open",
+        arguments: [this],
+      };
+    }
+  }
+}
 
 /* ------------------------------------------------------------------
  *  Activate / deactivate
  * ---------------------------------------------------------------- */
 export function activate(ctx: vscode.ExtensionContext): void {
-
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.show();
+
+  // Status bar для upload
+  uploadStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+  uploadStatusBar.show();
 
   const tree = vscode.window.createTreeView("remote_sftp", { treeDataProvider: provider });
 
   tree.onDidExpandElement(async (e) => {
-    const host = String(e.element.label);
-    if (e.element.type === "host" && !sessions.has(host)) {
-      const cfg = getConfig()?.hosts?.[host] as HostConfig | undefined;
-      if (cfg) await connectAndCache(host, cfg);
-    }
     provider.refresh(e.element);
   });
 
   ctx.subscriptions.push(
+    statusBar,
+    uploadStatusBar,
     vscode.commands.registerCommand("remote-sftp.reload", () =>
       vscode.commands.executeCommand("workbench.action.reloadWindow")
+    ),
+    vscode.commands.registerCommand("remote-sftp.openSettings", () =>
+      vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "@ext:andriy063.remote-ftp-vscode"
+      )
     ),
     vscode.commands.registerCommand("remote-sftp.openFile", openFileCommand),
     vscode.commands.registerCommand("remote-sftp.download", downloadCommand),
@@ -133,8 +422,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
-  for (const c of sessions.values()) await disconnectClient(c);
-  sessions.clear();
+  await connectionPool.closeAll();
 }
 
 function escapeRegExp(text: string): string {
@@ -142,46 +430,10 @@ function escapeRegExp(text: string): string {
 }
 
 /* ------------------------------------------------------------------
- *  Tree item & provider
- * ---------------------------------------------------------------- */
-class RemoteItem extends vscode.TreeItem {
-  constructor(
-    public readonly label: string,
-    state: vscode.TreeItemCollapsibleState,
-    public readonly type: "host" | "dir" | "file",
-    public readonly data: RemoteItemData
-  ) {
-    super(label, state);
-    this.contextValue = type;
-
-    const uriPath = data.fullPath.startsWith("/") ? data.fullPath : `/${data.fullPath}`;
-    this.resourceUri = vscode.Uri.parse(uriPath).with({
-      scheme: "rsftp",
-      authority: data.host,
-    });
-
-    if (type === "file") {
-      this.command = {
-        command: "remote-sftp.openFile",
-        title: "Open",
-        arguments: [this],
-      };
-    }
-  }
-}
-
-
-
-// --- кінець Part 1 / 3 ---
-// extension.ts  –  PART 2 / 3
-// (Commands + retry/timeout helpers)
-
-/* ------------------------------------------------------------------
  *  Commands
  * ---------------------------------------------------------------- */
 
 async function copyRemotePathToClipboard(item: RemoteItem) {
-  // Копіюємо віддалений шлях у буфер обміну
   await vscode.env.clipboard.writeText(item.data.fullPath);
   vscode.window.showInformationMessage(`✅ Copied remote path: ${item.data.fullPath}`);
 }
@@ -195,34 +447,21 @@ async function chmodCommand(item: RemoteItem) {
   if (!chmodValue) return;
 
   const cfg = cfgFor(item.data.host);
-  const client = await connectToHost(cfg);
 
-  try {
+  await withConnection(item.data.host, cfg, async (client) => {
     if (item.type === "file" || item.type === "dir") {
       if (client instanceof SftpClient) {
-        // Для SFTP
-        await client.chmod(item.data.fullPath, parseInt(chmodValue, 8));  // chmod expects octal values
+        await client.chmod(item.data.fullPath, parseInt(chmodValue, 8));
       } else if (client instanceof FtpClient) {
-        // Для FTP — використовуємо команду SITE CHMOD
         const chmodCommand = `SITE CHMOD ${chmodValue} ${item.data.fullPath}`;
         await client.send(chmodCommand);
       }
     }
-  } finally {
-    await disconnectClient(client);
-  }
+  });
 
-  // Оновлюємо поточний вузол
   provider.refresh(item);
-
   vscode.window.showInformationMessage(`Permissions changed for '${item.label}'`);
 }
-
-
-
-
-
-
 
 async function renameCommand(item: RemoteItem) {
   const oldRemote = item.data.fullPath;
@@ -234,23 +473,21 @@ async function renameCommand(item: RemoteItem) {
   if (!newName || newName === oldName) return;
 
   const cfg = cfgFor(item.data.host);
-  const client = await connectToHost(cfg);
-  try {
-    const parent = path.posix.dirname(oldRemote);
-    const newRemote = path.posix.join(parent, newName);
+  const parent = path.posix.dirname(oldRemote);
+  const newRemote = path.posix.join(parent, newName);
+
+  await withConnection(item.data.host, cfg, async (client) => {
     if (client instanceof SftpClient) {
       await client.rename(oldRemote, newRemote);
     } else {
       await (client as FtpClient).rename(oldRemote, newRemote);
     }
-    // локальна копія
-    const oldLocal = toLocalPath(item.data.host, oldRemote);
-    const newLocal = toLocalPath(item.data.host, newRemote);
-    await fs.promises.mkdir(path.dirname(newLocal), { recursive: true });
-    await fs.promises.rename(oldLocal, newLocal).catch(() => { });
-  } finally {
-    await disconnectClient(client);
-  }
+  });
+
+  const oldLocal = toLocalPath(item.data.host, oldRemote);
+  const newLocal = toLocalPath(item.data.host, newRemote);
+  await fs.promises.mkdir(path.dirname(newLocal), { recursive: true });
+  await fs.promises.rename(oldLocal, newLocal).catch(() => { });
 
   provider.refresh();
   vscode.window.showInformationMessage(`Renamed to '${newName}'`);
@@ -265,30 +502,47 @@ async function createFileCommand(item: RemoteItem) {
 
   const remotePath = path.posix.join(item.data.fullPath, name);
   const cfg = cfgFor(item.data.host);
-  const client = await connectToHost(cfg);
-
-  // Створюємо тимчасовий порожній файл
   const tmpFile = path.join(os.tmpdir(), `rsftp-temp-${Date.now()}`);
   fs.writeFileSync(tmpFile, "");
 
   try {
-    if (cfg.protocol === "ftp") {
-      // FTP: передаємо шлях до файлу
-      await (client as FtpClient).uploadFrom(tmpFile, remotePath);
-    } else {
-      // SFTP: можна або put(Buffer), або теж uploadFrom(tmpFile)
-      await (client as SftpClient).put(Buffer.alloc(0), remotePath);
-    }
+    await withConnection(item.data.host, cfg, async (client) => {
+      if (cfg.protocol === "ftp") {
+        await (client as FtpClient).uploadFrom(tmpFile, remotePath);
+      } else {
+        await (client as SftpClient).put(Buffer.alloc(0), remotePath);
+      }
+    });
+
+    // Оновлюємо дерево
+    provider.refresh(item);
+
+    // Завантажуємо файл локально і відкриваємо
+    const localPath = toLocalPath(item.data.host, remotePath);
+
+    await withConnection(item.data.host, cfg, async (client) => {
+      await ensureDir(localPath);
+      if (client instanceof SftpClient) {
+        await client.fastGet(remotePath, localPath);
+      } else {
+        await client.downloadTo(localPath, remotePath);
+      }
+    });
+
+    // Створюємо бекап
+    await createBackup(localPath, remotePath, item.data.host);
+
+    // Відкриваємо файл в редакторі
+    const doc = await vscode.workspace.openTextDocument(localPath);
+    await vscode.window.showTextDocument(doc, { preview: false });
+
+    vscode.window.showInformationMessage(`Created and opened file '${name}'`);
+
+  } catch (error) {
+    vscode.window.showErrorMessage(`Failed to create file '${name}': ${error}`);
   } finally {
-    // Видаляємо тимчасовий файл і клієнта
     fs.unlinkSync(tmpFile);
-    await disconnectClient(client);
   }
-
-  // Оновлюємо дерево на поточній директорії
-  provider.refresh(item);
-
-  vscode.window.showInformationMessage(`Created file '${name}'`);
 }
 
 async function createFolderCommand(item: RemoteItem) {
@@ -299,26 +553,21 @@ async function createFolderCommand(item: RemoteItem) {
   if (!folderName) return;
 
   const cfg = cfgFor(item.data.host);
-  const client = await connectToHost(cfg);
   const remoteDir = path.posix.join(item.data.fullPath, folderName);
-  try {
+
+  await withConnection(item.data.host, cfg, async (client) => {
     if (client instanceof SftpClient) {
       await client.mkdir(remoteDir, true);
     } else {
       await (client as FtpClient).ensureDir(remoteDir);
     }
-  } finally {
-    await disconnectClient(client);
-  }
+  });
 
   provider.refresh(item);
   vscode.window.showInformationMessage(`Created folder '${folderName}'`);
 }
 
-
-
 async function deleteCommand(item: RemoteItem) {
-  // 1) підтвердження
   const confirm = await vscode.window.showWarningMessage(
     `Delete remote ${item.type} '${item.label}' and its local copy?`,
     { modal: true },
@@ -329,10 +578,9 @@ async function deleteCommand(item: RemoteItem) {
   vscode.window.showInformationMessage(`Deleting started...`);
 
   const cfg = cfgFor(item.data.host);
-  const client = await connectToHost(cfg);
-  try {
-    const remote = item.data.fullPath;
-    // 2) видалити на сервері
+  const remote = item.data.fullPath;
+
+  await withConnection(item.data.host, cfg, async (client) => {
     if (item.type === "file") {
       if (client instanceof SftpClient) {
         await client.delete(remote);
@@ -340,45 +588,33 @@ async function deleteCommand(item: RemoteItem) {
         await client.remove(remote);
       }
     } else {
-      // папка
       if (client instanceof SftpClient) {
         try {
-          await (client as any).rmdir(item.data.fullPath, true);                 // v8–v9
+          await (client as any).rmdir(remote, true);
         } catch {
-          await (client as any).rmdir(item.data.fullPath, { recursive: true });  // v10+
+          await (client as any).rmdir(remote, { recursive: true });
         }
       } else {
-        await (client as FtpClient).removeDir(item.data.fullPath);
+        await (client as FtpClient).removeDir(remote);
       }
     }
+  });
 
-
-
-    // 3) видалити локальну копію
-    const local = toLocalPath(item.data.host, remote);
-    try {
-      const stat = await fs.promises.stat(local);
-      if (stat.isDirectory()) {
-        await fs.promises.rm(local, { recursive: true, force: true });
-      } else {
-        await fs.promises.unlink(local);
-      }
-    } catch {
-      /* ігноруємо, якщо нема локальної копії */
+  const local = toLocalPath(item.data.host, remote);
+  try {
+    const stat = await fs.promises.stat(local);
+    if (stat.isDirectory()) {
+      await fs.promises.rm(local, { recursive: true, force: true });
+    } else {
+      await fs.promises.unlink(local);
     }
+  } catch { }
 
-    provider.refresh();
-
-    vscode.window.showInformationMessage(
-      `Deleted ${item.type} '${item.label}'`
-    );
-  } finally {
-    await disconnectClient(client);
-  }
+  provider.refresh();
+  vscode.window.showInformationMessage(`Deleted ${item.type} '${item.label}'`);
 }
 
 async function uploadFileCommand(item: RemoteItem) {
-  // вибір локальних файлів
   const uris = await vscode.window.showOpenDialog({
     canSelectFiles: true,
     canSelectFolders: false,
@@ -389,33 +625,36 @@ async function uploadFileCommand(item: RemoteItem) {
   if (!uris) return;
 
   const cfg = cfgFor(item.data.host);
-  const remoteDir = item.data.fullPath;  // куди завантажуємо
+  const remoteDir = item.data.fullPath;
+
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `Uploading ${uris.length} file(s)…`,
     cancellable: true
   }, async (progress, token) => {
     let done = 0;
-    const client = await connectToHost(cfg);
-    try {
-      for (const uri of uris) {
-        const local = uri.fsPath;
-        const remote = path.posix.join(remoteDir, path.basename(local));
-        await uploadFileWithRetry(client, local, remote, cfg, token);
-        progress.report({ message: `${++done}/${uris.length}` });
-      }
-    } finally {
-      await disconnectClient(client);
+    for (const uri of uris) {
+      const local = uri.fsPath;
+      const remote = path.posix.join(remoteDir, path.basename(local));
+
+      await withConnection(item.data.host, cfg, async (client) => {
+        await ensureRemoteDir(client, path.posix.dirname(remote));
+        if (client instanceof SftpClient) {
+          await client.fastPut(local, remote);
+        } else {
+          await client.uploadFrom(local, remote);
+        }
+      }, token);
+
+      progress.report({ message: `${++done}/${uris.length}` });
     }
   });
+
   vscode.window.showInformationMessage(`Uploaded ${uris.length} file(s) → ${remoteDir}`);
-
   provider.refresh(item);
-
 }
 
 async function uploadFolderCommand(item: RemoteItem) {
-  // 1) Відкриваємо діалог вибору папок
   const uris = await vscode.window.showOpenDialog({
     canSelectFiles: false,
     canSelectFolders: true,
@@ -425,7 +664,6 @@ async function uploadFolderCommand(item: RemoteItem) {
   });
   if (!uris || uris.length === 0) return;
 
-  // 2) Готуємо список завдань: для кожної папки — список файлів + remote-шлях
   const jobs: { local: string; remote: string }[] = [];
   const cfg = cfgFor(item.data.host);
   const remoteBase = item.data.fullPath;
@@ -433,59 +671,64 @@ async function uploadFolderCommand(item: RemoteItem) {
   for (const uri of uris) {
     const rootPath = uri.fsPath;
     const rootName = path.basename(rootPath);
-    // збираємо всі файли рекурсивно
     const files = await collectLocalFiles(rootPath, new vscode.CancellationTokenSource().token);
     for (const local of files) {
       const rel = path.relative(rootPath, local).split(path.sep).join("/");
-      // remoteBase / rootName / rel
       const remote = path.posix.join(remoteBase, rootName, rel);
       jobs.push({ local, remote });
     }
   }
 
-  // 3) Виконуємо upload
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `Uploading ${jobs.length} file(s)…`,
     cancellable: true
   }, async (progress, token) => {
     let done = 0;
-    const client = await connectToHost(cfg);
-    try {
-      for (const { local, remote } of jobs) {
-        await uploadFileWithRetry(client, local, remote, cfg, token);
-        progress.report({ message: `${++done}/${jobs.length}` });
-      }
-    } finally {
-      await disconnectClient(client);
+    for (const { local, remote } of jobs) {
+      await withConnection(item.data.host, cfg, async (client) => {
+        await ensureRemoteDir(client, path.posix.dirname(remote));
+        if (client instanceof SftpClient) {
+          await client.fastPut(local, remote);
+        } else {
+          await client.uploadFrom(local, remote);
+        }
+      }, token);
+
+      progress.report({ message: `${++done}/${jobs.length}` });
     }
   });
 
-  vscode.window.showInformationMessage(
-    `Uploaded ${jobs.length} files into ${item.data.host}:${remoteBase}`
-  );
-
-  // 4) Оновлюємо дерево
+  vscode.window.showInformationMessage(`Uploaded ${jobs.length} files into ${item.data.host}:${remoteBase}`);
   provider.refresh(item);
 }
 
-
-
-
-
 async function openFileCommand(item: RemoteItem) {
   if (item.type !== "file") return;
-  const client = await getHealthyClientForHost(item.data.host);
-  if (!client) {
-    vscode.window.showWarningMessage(`Not connected to ${item.data.host}`);
-    return;
+
+  // Дебаунс: якщо файл відкривали менше ніж 300мс тому - ігноруємо
+  const fileKey = `${item.data.host}:${item.data.fullPath}`;
+  const lastOpen = openFileDebounce.get(fileKey) || 0;
+  const now = Date.now();
+
+  if (now - lastOpen < 300) {
+    return; // Ігноруємо повторний виклик
   }
+
+  openFileDebounce.set(fileKey, now);
+
   const cfg = cfgFor(item.data.host);
   const local = toLocalPath(item.data.host, item.data.fullPath);
 
-  await downloadFile(client, item.data.fullPath, local, cfg);
+  await withConnection(item.data.host, cfg, async (client) => {
+    await ensureDir(local);
+    if (client instanceof SftpClient) {
+      await client.fastGet(item.data.fullPath, local);
+    } else {
+      await client.downloadTo(local, item.data.fullPath);
+    }
+  });
 
-  // Створюємо резервну копію після того, як файл завантажено локально
   await createBackup(local, item.data.fullPath, item.data.host);
 
   const doc = await vscode.workspace.openTextDocument(local);
@@ -494,7 +737,6 @@ async function openFileCommand(item: RemoteItem) {
 
 async function downloadCommand(item: RemoteItem) {
   const cfg = cfgFor(item.data.host);
-  //const workers = cfg.protocol === "sftp" ? 1 : cfg.workers ?? 4;
   const workers = cfg.workers ?? 4;
   const baseLocal = toLocalPath(item.data.host, item.data.fullPath);
 
@@ -505,39 +747,28 @@ async function downloadCommand(item: RemoteItem) {
       cancellable: true
     },
     async (progress, token) => {
-
-      // одиночний файл
       if (item.type === "file") {
-        const client = await connectToHost(cfg);
-        try {
-          await downloadFile(
-            client,
-            item.data.fullPath,
-            baseLocal,
-            cfg,
-            token
-          );
-        } finally {
-          await disconnectClient(client);
-        }
+        await withConnection(item.data.host, cfg, async (client) => {
+          await ensureDir(baseLocal);
+          if (client instanceof SftpClient) {
+            await client.fastGet(item.data.fullPath, baseLocal);
+          } else {
+            await client.downloadTo(baseLocal, item.data.fullPath);
+          }
+        }, token);
         return;
       }
 
-      // директорія
       progress.report({ message: "Scanning 0 files…" });
-      // створюємо окремий клієнт для сканування і закриваємо після
-      const scanClient = await connectToHost(cfg);
-      let files: string[] = [];
-      try {
-        files = await collectRemoteFiles(
-          scanClient,
+
+      const files = await withConnection(item.data.host, cfg, async (client) => {
+        return await collectRemoteFiles(
+          client,
           item.data.fullPath,
           token,
           (count) => progress.report({ message: `Scanning ${count} files…` })
         );
-      } finally {
-        await disconnectClient(scanClient);
-      }
+      }, token);
 
       progress.report({ message: `Found ${files.length} files` });
 
@@ -546,8 +777,7 @@ async function downloadCommand(item: RemoteItem) {
         files,
         workers,
         token,
-        (d, t) =>
-          progress.report({ message: `Downloading… ${d}/${t}` })
+        (d, t) => progress.report({ message: `Downloading… ${d}/${t}` })
       );
     }
   );
@@ -555,104 +785,9 @@ async function downloadCommand(item: RemoteItem) {
   vscode.window.showInformationMessage(`Downloaded → ${baseLocal}`);
 }
 
-async function uploadCommand(item: RemoteItem) {
-  const cfg = cfgFor(item.data.host);
-  const workers = cfg.workers ?? 4;
-  const baseLocal = toLocalPath(item.data.host, item.data.fullPath);
-
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `Uploading ${item.label}…`,
-      cancellable: true
-    },
-    async (progress, token) => {
-
-      // одиночний файл
-      if (item.type === "file") {
-        const client = await connectToHost(cfg);
-        try {
-          await uploadFileWithRetry(
-            client,
-            baseLocal,
-            item.data.fullPath,
-            cfg,
-            token
-          );
-        } finally {
-          await disconnectClient(client);
-        }
-        return;
-      }
-
-
-      // директорія
-      progress.report({ message: "Scanning local directory…" });
-      const files = await collectLocalFiles(baseLocal, token);
-      progress.report({ message: `Found ${files.length} files` });
-
-      await uploadMany(
-        { host: item.data.host, cfg },
-        files,
-        item.data.fullPath,
-        workers,
-        token,
-        (d, t) =>
-          progress.report({ message: `Uploading… ${d}/${t}` })
-      );
-    }
-  );
-
-  vscode.window.showInformationMessage(
-    `Upload complete → ${item.data.host}:${item.data.fullPath}`
-  );
-}
-
-function isFtpAlive(c: FtpClient): boolean {
-  // basic-ftp зберігає Socket у client.ftp.socket
-  const sock = (c as any)?.ftp?.socket as any;
-  return !!sock && sock.destroyed === false;
-}
-
-
-// заміна/додавання getHealthyClientForHost з дедуплікацією
-async function getHealthyClientForHost(host: string): Promise<RemoteClient | undefined> {
-  const cfg = cfgFor(host);
-  if (!cfg?.host) return undefined;
-
-  let client = sessions.get(host) as RemoteClient | undefined;
-
-  // якщо FTP і сокет мертвий — закриваємо і забираємо з кешу
-  if (client && cfg.protocol === "ftp" && client instanceof FtpClient && !isFtpAlive(client)) {
-    try { await disconnectClient(client); } catch { }
-    sessions.delete(host);
-    client = undefined;
-  }
-
-  if (client) return client;
-
-  // дедуплікуємо одночасні підключення до одного хоста
-  let inFlight = connecting.get(host);
-  if (!inFlight) {
-    inFlight = (async () => {
-      const c = await connectToHost(cfg);
-      sessions.set(host, c);
-      return c;
-    })();
-    connecting.set(host, inFlight);
-  }
-
-  try {
-    return await inFlight;
-  } finally {
-    connecting.delete(host);
-  }
-}
-
-
-
 async function handleSave(doc: vscode.TextDocument) {
   const rel = path.relative(workspaceRoot, doc.fileName);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return;
   const [host, ...rest] = rel.split(path.sep);
   if (!host || rest.length === 0) return;
 
@@ -662,70 +797,69 @@ async function handleSave(doc: vscode.TextDocument) {
 
   await createBackup(localPath, remotePath, host);
 
-  // беремо здоровий кешований клієнт; якщо з якихось причин немає — тимчасово підключаємось
-  let client = await getHealthyClientForHost(host);
-  let tempClient = false;
-  if (!client) {
-    client = await connectToHost(cfg);
-    tempClient = true;
-  }
+  // Показуємо статус "Uploading..."
+  uploadStatusBar.text = "$(sync~spin) Uploading...";
+  uploadStatusBar.tooltip = remotePath;
 
   try {
-    await uploadFileWithRetry(
-      client,
-      localPath,
-      remotePath,
-      cfg,
-      undefined,
-      success => {
-        if (success) vscode.window.showInformationMessage(`✅ Uploaded`);
-        else vscode.window.showInformationMessage(`❌ Failed to upload`);
+    await withConnection(host, cfg, async (client) => {
+      await ensureRemoteDir(client, path.posix.dirname(remotePath));
+      if (client instanceof SftpClient) {
+        await client.fastPut(localPath, remotePath);
+      } else {
+        await client.uploadFrom(localPath, remotePath);
       }
-    );
-  } finally {
-    if (tempClient) await disconnectClient(client);
+    });
+
+    // Успіх
+    uploadStatusBar.text = "$(check) Uploaded";
+    uploadStatusBar.tooltip = remotePath;
+
+    // Ховаємо через 5 секунд
+    setTimeout(() => {
+      uploadStatusBar.text = "";
+      uploadStatusBar.tooltip = "";
+    }, 5000);
+
+  } catch (e) {
+    // Помилка
+    uploadStatusBar.text = "$(error) Upload failed";
+    uploadStatusBar.tooltip = `${remotePath}\n${e}`;
+
+    // Ховаємо через 5 секунд
+    setTimeout(() => {
+      uploadStatusBar.text = "";
+      uploadStatusBar.tooltip = "";
+    }, 5000);
   }
 }
 
+/* ------------------------------------------------------------------
+ *  Helpers
+ * ---------------------------------------------------------------- */
 
-
-// Функція для створення резервної копії
 async function createBackup(localFilePath: string, remotePath: string, host: string) {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) {
-    vscode.window.showErrorMessage('No workspace folder open');
-    return;
-  }
+  if (!workspaceRoot) return;
 
-  // Створення папки "rsftpbackups", якщо її немає
   const backupFolder = path.join(workspaceRoot, 'rsftpbackups', host);
-  const relativePath = path.relative(workspaceRoot, localFilePath); // Відносний шлях локального файлу
+  const relativePath = path.relative(workspaceRoot, localFilePath);
   const backupFilePath = path.join(backupFolder, relativePath);
-
   const backupDir = path.dirname(backupFilePath);
 
   try {
-    // Створюємо всі необхідні підкаталоги
     fs.mkdirSync(backupDir, { recursive: true });
-
-    // Генеруємо ім'я файлу для резервної копії з датою
     const fileNameWithDate = getFileNameWithDate(localFilePath);
     const backupPath = path.join(backupDir, fileNameWithDate);
 
-    // Копіюємо локальний файл в папку резервних копій
     if (fs.existsSync(localFilePath)) {
       fs.copyFileSync(localFilePath, backupPath);
-      //vscode.window.showInformationMessage(`✅ Backup created: ${fileNameWithDate}`);
-    } else {
-      vscode.window.showErrorMessage(`❌ Backup: Local file does not exist: ${localFilePath}`);
     }
   } catch (e) {
-    vscode.window.showErrorMessage(`❌ Failed to create backup for ${localFilePath}`);
     console.error(e);
   }
 }
 
-// Генерація імені файлу з датою
 function getFileNameWithDate(localFilePath: string): string {
   const now = new Date();
   const day = String(now.getDate()).padStart(2, '0');
@@ -735,132 +869,24 @@ function getFileNameWithDate(localFilePath: string): string {
   const minutes = String(now.getMinutes()).padStart(2, '0');
   const seconds = String(now.getSeconds()).padStart(2, '0');
 
-  // Генерація нового імені файлу з датою
   const fileNameWithoutExt = path.basename(localFilePath, path.extname(localFilePath));
   const newFileName = `${fileNameWithoutExt}-${day}-${month}-${year}-${hours}-${minutes}-${seconds}${path.extname(localFilePath)}`;
 
   return newFileName;
 }
 
-
-
-
-/* ------------------------------------------------------------------
- *  Retry / timeout wrapper
- * ---------------------------------------------------------------- */
 function wait(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  attempts: number,
-  timeout: number,
-  token?: vscode.CancellationToken
-): Promise<T> {
-  let last: unknown;
-
-  for (let i = 0; i < attempts; i++) {
-    if (token?.isCancellationRequested) throw new vscode.CancellationError();
-
-    try {
-      return await Promise.race([
-        fn(),
-        new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error("timeout")), timeout)
-        ),
-      ]);
-    } catch (e) {
-      last = e;
-      await wait(400 * (i + 1)); // простий back-off
-    }
-  }
-
-  throw last;
-}
-
-/* ------------------------------------------------------------------
- *  download / upload one file with retry
- * ---------------------------------------------------------------- */
-async function downloadFile(
-  client: RemoteClient,
-  remote: string,
-  local: string,
-  cfg: HostConfig,
-  token?: vscode.CancellationToken
-) {
-  await ensureDir(local);
-  await withRetry(
-    async () => {
-      if (token?.isCancellationRequested) throw new vscode.CancellationError();
-      if (client instanceof SftpClient) await client.fastGet(remote, local);
-      else await client.downloadTo(local, remote);
-    },
-    cfg.retry ?? 3,
-    cfg.timeoutMs ?? 30_000,
-    token
-  );
-}
-
-/**
-* Переконається, що віддалена папка існує.
-*/
 async function ensureRemoteDir(client: RemoteClient, remoteDir: string): Promise<void> {
   if (client instanceof SftpClient) {
-    // SFTP: mkdir -p
     await client.mkdir(remoteDir, true);
   } else {
-    // FTP: аналогічна утиліта
-    // @ts-ignore: basic-ftp implements ensureDir()
     await (client as FtpClient).ensureDir(remoteDir);
   }
 }
 
-
-/**
- * Завантажує один файл з retry/timeout і перед цим створює віддалену директорію.
- */
-async function uploadFileWithRetry(
-  client: RemoteClient,
-  local: string,
-  remote: string,
-  cfg: HostConfig,
-  token?: vscode.CancellationToken,
-  onResult?: (success: boolean) => void
-): Promise<void> {
-  // 1) створюємо батьківську папку на сервері
-  const remoteDir = path.posix.dirname(remote);
-  await ensureRemoteDir(client, remoteDir);
-
-  // 2) власне upload з retry та timeout
-  try {
-    await withRetry(
-      async () => {
-        if (token?.isCancellationRequested) throw new vscode.CancellationError();
-        if (client instanceof SftpClient) {
-          await client.fastPut(local, remote);
-        } else {
-          await client.uploadFrom(local, remote);
-        }
-      },
-      cfg.retry ?? 3,
-      cfg.timeoutMs ?? 30_000,
-      token
-    );
-    onResult?.(true);
-  } catch (e) {
-    onResult?.(false);
-    throw e;
-  }
-}
-
-
-
-// (parallel transfers · collect helpers · low-level utils)
-
-/* ------------------------------------------------------------------
- *  Паралельні воркери
- * ---------------------------------------------------------------- */
 async function downloadMany(
   hostCfg: { host: string; cfg: HostConfig },
   list: string[],
@@ -872,21 +898,20 @@ async function downloadMany(
   const queue = [...list];
 
   const worker = async () => {
-    const client = await connectToHost(hostCfg.cfg); // власне зʼєднання
-    try {
-      while (queue.length && !token.isCancellationRequested) {
-        const remote = queue.pop()!;
-        await downloadFile(
-          client,
-          remote,
-          toLocalPath(hostCfg.host, remote),
-          hostCfg.cfg,
-          token
-        );
-        onProgress(++done, list.length);
-      }
-    } finally {
-      await disconnectClient(client);
+    while (queue.length && !token.isCancellationRequested) {
+      const remote = queue.pop()!;
+      const local = toLocalPath(hostCfg.host, remote);
+
+      await withConnection(hostCfg.host, hostCfg.cfg, async (client) => {
+        await ensureDir(local);
+        if (client instanceof SftpClient) {
+          await client.fastGet(remote, local);
+        } else {
+          await client.downloadTo(local, remote);
+        }
+      }, token);
+
+      onProgress(++done, list.length);
     }
   };
 
@@ -894,43 +919,6 @@ async function downloadMany(
   if (token.isCancellationRequested) throw new vscode.CancellationError();
 }
 
-async function uploadMany(
-  hostCfg: { host: string; cfg: HostConfig },
-  locals: string[],
-  remoteBase: string,
-  workers: number,
-  token: vscode.CancellationToken,
-  onProgress: (done: number, total: number) => void
-) {
-  let done = 0;
-  const queue = [...locals];
-
-  const worker = async () => {
-    const client = await connectToHost(hostCfg.cfg);
-    try {
-      while (queue.length && !token.isCancellationRequested) {
-        const local = queue.pop()!;
-        const rel = path
-          .relative(toLocalPath(hostCfg.host, remoteBase), local)
-          .split(path.sep)
-          .join("/");
-        const remote = path.posix.join(remoteBase, rel);
-
-        await uploadFileWithRetry(client, local, remote, hostCfg.cfg, token);
-        onProgress(++done, locals.length);
-      }
-    } finally {
-      await disconnectClient(client);
-    }
-  };
-
-  await Promise.all(Array.from({ length: workers }, worker));
-  if (token.isCancellationRequested) throw new vscode.CancellationError();
-}
-
-/**
-* Збирає всі файли рекурсивно, викликає onProgress(count) для кожного знайденого файлу.
-*/
 async function collectRemoteFiles(
   client: RemoteClient,
   startDir: string,
@@ -939,7 +927,6 @@ async function collectRemoteFiles(
 ): Promise<string[]> {
   const stack: string[] = [startDir];
   const files: string[] = [];
-  // спочатку нуль
   onProgress(0);
 
   while (stack.length) {
@@ -949,7 +936,6 @@ async function collectRemoteFiles(
     for (const it of items) {
       if (it.type === "file") {
         files.push(it.data.fullPath);
-        // оновлюємо прогрес
         onProgress(files.length);
       } else {
         stack.push(it.data.fullPath);
@@ -979,9 +965,6 @@ async function collectLocalFiles(
   return files;
 }
 
-/* ------------------------------------------------------------------
- *  Low-level util
- * ---------------------------------------------------------------- */
 function cfgFor(host: string): HostConfig {
   return (getConfig()?.hosts?.[host] as HostConfig) ?? {};
 }
@@ -1032,71 +1015,35 @@ async function ensureDir(p: string): Promise<void> {
   await fs.promises.mkdir(path.dirname(p), { recursive: true });
 }
 
-async function connectAndCache(label: string, cfg: HostConfig) {
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Window,
-      title: `Connecting to ${label}…`,
-    },
-    async () => {
-      sessions.set(label, await connectToHost(cfg));
-    }
-  );
-}
-
-async function connectToHost(cfg: HostConfig): Promise<RemoteClient> {
-  if (cfg.protocol === "sftp") {
-    const c = new SftpClient();
-    await c.connect({
-      host: cfg.host,
-      port: cfg.port ?? 22,
-      username: cfg.username,
-      password: cfg.password,
-      privateKey: cfg.private_key && fs.readFileSync(cfg.private_key),
-      keepaliveInterval: 10000,
-      readyTimeout: cfg.timeoutMs ?? 30000
-    });
-    return c;
-  }
-
-  const c = new FtpClient();
-  await c.access({
-    host: cfg.host,
-    port: cfg.port ?? 21,
-    user: cfg.username,
-    password: cfg.password,
-  });
-  return c;
+function isEmpty(obj: any): boolean {
+  if (obj == null) return true;
+  if (typeof obj === "object") return Object.keys(obj).length === 0;
+  if (typeof obj === "string") return obj.trim().length === 0;
+  return false;
 }
 
 function getConfig(): any {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!folder) return null;
   if (!rsftp.config) {
+    const global_config = vscode.workspace.getConfiguration("remote-sftp");
+    const settings_global_config = global_config.get<any>("config")
+    if (!isEmpty(settings_global_config)) {
+      rsftp.config = settings_global_config;
+    }
     try {
-      rsftp.config = JSON.parse(
+      const local_config = JSON.parse(
         fs.readFileSync(path.join(folder, "rsftpconfig.json"), "utf8")
       );
+      if (!isEmpty(local_config)) {
+        rsftp.config = local_config;
+      }
     } catch {
-      vscode.window.showWarningMessage(`Missing or invalid rsftpconfig.json file. Refer to documentation.`);
+    }
+    if (isEmpty(rsftp.config)) {
+      vscode.window.showWarningMessage(`Missing or invalid rsftpconfig.json file OR global config. Refer to documentation.`);
       return null;
     }
   }
   return rsftp.config;
 }
-
-async function disconnectClient(c: RemoteClient) {
-  try {
-    if (c instanceof SftpClient) {
-      await c.end();                 // було: c.end()
-    } else {
-      const ftp = c as FtpClient;
-      // close() у basic-ftp може бути sync, await не нашкодить
-      await (ftp.close() as any);
-    }
-  } catch { /* ignore */ }
-}
-
-
-
-// ===== End of extension.ts =====

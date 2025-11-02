@@ -2,7 +2,7 @@
   "name": "remote-ftp-vscode",
   "displayName": "Remote FTP [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.3.0",
+  "version": "0.5.2",
   "publisher": "andriy063",
   "engines": {
     "vscode": "^1.80.0"
@@ -18,10 +18,46 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "FTP Extension Settings",
+      "properties": {
+        "remote-sftp.config": {
+          "type": "object",
+          "default": {
+            "hosts": {
+              "the_host_1": {
+                "protocol": "ftp",
+                "host": "ftp.demo.ca",
+                "port": 21,
+                "username": "demo@demo.ca",
+                "password": "pwd",
+                "remote_path": "/",
+                "workers": 1
+              },
+              "some_sftp_host": {
+                "protocol": "sftp",
+                "host": "111.245.177.28",
+                "port": 22,
+                "username": "user",
+                "password": "pwd",
+                "remote_path": "/myproject1",
+                "workers": 1
+              }
+            }
+          },
+          "description": "JSON hosts configuration"
+        }
+      }
+    },
     "commands": [
       {
         "command": "remote-sftp.reload",
-        "title": "🔁 Reload RSFTP"
+        "title": "🔁 Reload"
+      },
+      {
+        "command": "remote-sftp.openSettings",
+        "title": "⚙️ Settings"
       },
       {
         "command": "remote-sftp.download",
@@ -63,6 +99,7 @@
     "views": {
       "explorer": [
         {
+          "icon": "./res/images/logo.png",
           "id": "remote_sftp",
           "name": "Remote FTP",
           "priority": 101
@@ -73,6 +110,11 @@
       "view/title": [
         {
           "command": "remote-sftp.reload",
+          "when": "view == remote_sftp",
+          "group": "navigation"
+        },
+        {
+          "command": "remote-sftp.openSettings",
           "when": "view == remote_sftp",
           "group": "navigation"
         }
