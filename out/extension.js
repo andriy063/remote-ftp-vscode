@@ -131,24 +131,27 @@ class ConnectionPool {
      * Створює нове з'єднання (з дедуплікацією)
      */
     async createConnection(host, cfg) {
-        // Дедуплікація: якщо вже підключаємось - чекаємо
         const key = `${host}-connect`;
         let inFlight = this.connecting.get(key);
-        if (!inFlight) {
-            inFlight = (async () => {
-                const client = await this.doConnect(cfg);
-                // Одразу після створення додаємо в пул
-                const pool = this.pools.get(host) || [];
-                pool.push(client);
-                this.pools.set(host, pool);
-            })();
-            this.connecting.set(key, inFlight);
-        }
-        try {
+        if (inFlight) {
+            // Якщо вже йде процес підключення, чекаємо і пробуємо знову взяти з пулу
+            // або створюємо паралельне з'єднання, якщо пул все ще порожній
             await inFlight;
-            // Беремо щойно створене з'єднання
-            const pool = this.pools.get(host);
-            return pool.pop();
+            return this.acquire(host, cfg);
+        }
+        const connectPromise = (async () => {
+            try {
+                const client = await this.doConnect(cfg);
+                return client;
+            }
+            catch (err) {
+                throw err;
+            }
+        })();
+        this.connecting.set(key, connectPromise.then(() => { }).catch(() => { }));
+        try {
+            const client = await connectPromise;
+            return client;
         }
         finally {
             this.connecting.delete(key);
@@ -238,6 +241,9 @@ async function withConnection(host, cfg, operation, token) {
         try {
             // Беремо з'єднання з пулу
             client = await connectionPool.acquire(host, cfg);
+            if (!client) {
+                throw new Error("Failed to acquire connection: client is undefined");
+            }
             // Виконуємо операцію з timeout
             const result = await Promise.race([
                 operation(client),
@@ -771,6 +777,7 @@ async function downloadMany(hostCfg, list, workers, token, onProgress) {
                     await client.fastGet(remote, local);
                 }
                 else {
+                    console.log('d-to');
                     await client.downloadTo(local, remote);
                 }
             }, token);
