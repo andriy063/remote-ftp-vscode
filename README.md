@@ -4,6 +4,8 @@ A powerful, lightweight, and resilient extension to browse, edit, sync, and mana
 
 Designed for developers who need a quick and reliable connection without the bloat.
 
+[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
+[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
 ---
 
 ## ✨ Features
