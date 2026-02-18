@@ -1,74 +1,113 @@
 # Remote FTP/SFTP for VS Code
 
-Easily browse, open, edit and download files or folders from remote FTP or SFTP servers directly in the VS Code sidebar.
+A powerful, lightweight, and resilient extension to browse, edit, sync, and manage files on remote FTP/SFTP servers directly from VS Code.
+
+Designed for developers who need a quick and reliable connection without the bloat.
 
 ---
 
 ## ✨ Features
 
-- 📂 Full tree view of remote files and directories
-- 🔒 Support for both **FTP** and **SFTP**
-- 📄 Open remote files for editing
-- 💾 Automatic upload on save
-- 📥 Download individual files or entire folders (change `workers` in config to increase the threads, i.e. to increase the loading speed)
-- 📦 Local auto backup (changed files in `rsftpbackups` folder)
+- 📂 **Full Tree View:** Browse remote file systems seamlessly.
+- 🔒 **Secure Protocols:** Support for **FTP** and **SFTP** (password & private key).
+- ⚡ **Resilient Connection:** Smart connection pooling and auto-reconnect logic.
+- 📝 **Direct Editing:** Open remote files, edit, and save to upload automatically.
+- ⭐ **Bookmarks:** Quickly bookmark frequently accessed remote folders for instant navigation.
+- 📥 **Bulk Operations:** Upload/Download entire folders with recursive support.
+- 📦 **Safety First:** Automatic local backups of edited files with rotation support.
 
 ---
 
 ## 🚀 Getting Started
 
-1. **Open a workspace** folder in VS Code.
-2. Create a config file (`rsftpconfig.json`) in the root of your project
-   ```json
-   {
-      "hosts": {
-        "host_1": {
-          "protocol": "ftp",
-          "host": "ftp.demo.ca",
-          "port": 21,
-          "username": "demo@demo.ca",
-          "password": "pwd",
-          "remote_path": "/",
-          "workers": 1
-        },
-        "somesftphost": {
-          "protocol": "sftp",
-          "host": "111.245.177.28",
-          "port": 22,
-          "username": "user",
-          "password": "pwd",
-          "remote_path": "/",
-          "workers": 1
-        },
-      }
+### 1. Setup Configuration
+Create a file named `rsftpconfig.json` in the root of your workspace.
+
+```json
+{
+  "hosts": {
+    "My Demo Site": {
+      "protocol": "ftp",
+      "host": "ftp.example.com",
+      "port": 21,
+      "username": "user",
+      "password": "password123",
+      "remote_path": "/public_html",
+      "workers": 1
+    },
+    "Secure Server": {
+      "protocol": "sftp",
+      "host": "192.168.1.50",
+      "port": 22,
+      "username": "root",
+      "private_key": "/Users/me/.ssh/id_rsa",
+      "remote_path": "/var/www/app",
+      "workers": 1
     }
-   ```
-3. Open the **Remote FTP** panel in the Explorer view.
-4. Click to expand a host, browse files, and start editing or downloading!
+  },
+  "backup_retention_days": 7
+}
+```
+
+### 2. Connect
+Open the **Remote FTP** panel in the VS Code Explorer sidebar. Your hosts will appear automatically.
 
 ---
 
-## 🖱️ Context Menu
+## ⚙️ Configuration Options
 
-Right-click any file or folder in the tree to:
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `protocol` | `ftp` or `sftp` | Required |
+| `host` | Server IP or Domain | Required |
+| `username` | SSH/FTP Username | Required |
+| `password` | Password (optional if using key) | - |
+| `private_key` | Absolute path to SSH private key (SFTP only) | - |
+| `remote_path` | Starting directory on the server | `/` |
+| `workers` | Number of parallel threads for up/download | `1` |
+| `backup_retention_days`| How many days to keep local backups | `7` |
 
-- **Download** – downloads selected item to workspace folder (HOSTNAME/externalfolder/file.txt)
-- **Delete** – external and local file or folder
-- **Copy remote Path**
-- **Run chmod**
-- **Rename**
-- **Upload file(s)/folder**
-- **New folder/file**
+---
+
+## 🖱️ Context Menu & Actions
+
+Right-click on any remote item to perform actions:
+
+- **📥 Download:** Downloads file or folder to your local workspace (preserves path structure).
+- **📤 Upload:** Upload local files or folders to the selected remote directory.
+- **✏️ Rename:** Rename files or folders on the server (and locally if they match).
+- **🗑️ Delete:** Permanently delete remote files/folders (and local mirrors).
+- **🔐 Chmod:** Change file permissions (e.g., `755`).
+- **📋 Copy Path:** Copy the full remote path to the clipboard.
+- **⭐ Bookmark:** Add folder to bookmarks.
+
+---
+
+## ⭐ Bookmarks System
+
+Navigate complex server structures faster.
+
+1. Right-click a remote folder and select **Bookmark**.
+2. Use the star icon on the top panel to see a list of saved locations.
+3. Selecting a bookmark instantly expands the tree to that location.
+
+---
+
+## 📦 Local Backups
+
+Every time you save a remote file, a backup is created locally in the `rsftpbackups` folder within your workspace.
+- Backups are timestamped.
+- Old backups are automatically cleaned up based on `backup_retention_days` (default: 7 days).
 
 ---
 
 ## 🧩 Requirements
 
 - VS Code ≥ 1.80
-- Internet connection to access remote servers
+- Active Internet connection
 
 ---
 
 ## 📃 License
 
-MIT © 2025 andriy063
+MIT © 2026 andriy063

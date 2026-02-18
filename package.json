@@ -2,7 +2,7 @@
   "name": "remote-ftp-vscode",
   "displayName": "Remote FTP [beta]",
   "description": "Connect to remote FTP/SFTP, browse files, edit and sync with ease.",
-  "version": "0.5.5",
+  "version": "0.6",
   "publisher": "andriy063",
   "engines": {
     "vscode": "^1.80.0"
@@ -26,25 +26,26 @@
           "type": "object",
           "default": {
             "hosts": {
-              "the_host_1": {
+              "My Demo Site": {
                 "protocol": "ftp",
-                "host": "ftp.demo.ca",
+                "host": "ftp.example.com",
                 "port": 21,
-                "username": "demo@demo.ca",
-                "password": "pwd",
-                "remote_path": "/",
+                "username": "user",
+                "password": "password123",
+                "remote_path": "/public_html",
                 "workers": 1
               },
-              "some_sftp_host": {
+              "Secure Server": {
                 "protocol": "sftp",
-                "host": "111.245.177.28",
+                "host": "192.168.1.50",
                 "port": 22,
-                "username": "user",
-                "password": "pwd",
-                "remote_path": "/myproject1",
+                "username": "root",
+                "private_key": "/Users/me/.ssh/id_rsa",
+                "remote_path": "/var/www/app",
                 "workers": 1
               }
-            }
+            },
+            "backup_retention_days": 7
           },
           "description": "JSON hosts configuration"
         }
@@ -53,11 +54,22 @@
     "commands": [
       {
         "command": "remote-sftp.reload",
-        "title": "🔁 Reload"
+        "title": "Reload extensions",
+        "icon": "$(refresh)"
       },
       {
         "command": "remote-sftp.openSettings",
-        "title": "⚙️ Settings"
+        "title": "Settings",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "remote-sftp.toggleBookmark",
+        "title": "Bookmark"
+      },
+      {
+        "command": "remote-sftp.openBookmarks",
+        "title": "Bookmarks",
+        "icon": "$(star)"
       },
       {
         "command": "remote-sftp.download",
@@ -117,6 +129,11 @@
           "command": "remote-sftp.openSettings",
           "when": "view == remote_sftp",
           "group": "navigation"
+        },
+        {
+          "command": "remote-sftp.openBookmarks",
+          "when": "view == remote_sftp",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -157,17 +174,22 @@
         },
         {
           "command": "remote-sftp.createFile",
-          "when": "view == remote_sftp && viewItem == dir",
+          "when": "view == remote_sftp && (viewItem == host || viewItem == dir)",
           "group": "ftp"
         },
         {
           "command": "remote-sftp.createFolder",
-          "when": "view == remote_sftp && viewItem == dir",
+          "when": "view == remote_sftp && (viewItem == host || viewItem == dir)",
           "group": "ftp"
         },
         {
           "command": "remote-sftp.chmod",
           "when": "view == remote_sftp && (viewItem == file || viewItem == dir)",
+          "group": "ftp"
+        },
+        {
+          "command": "remote-sftp.toggleBookmark",
+          "when": "view == remote_sftp && viewItem == dir",
           "group": "ftp"
         }
       ]
