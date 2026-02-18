@@ -1,11 +1,12 @@
+[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
+
 # Remote FTP/SFTP for VS Code
 
 A powerful, lightweight, and resilient extension to browse, edit, sync, and manage files on remote FTP/SFTP servers directly from VS Code.
 
 Designed for developers who need a quick and reliable connection without the bloat.
 
-[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
-[![Donate](https://raw.githubusercontent.com/stefan-niedermann/paypal-donate-button/master/paypal-donate-button.png)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
+[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
 
 ---
 
@@ -114,3 +115,5 @@ Every time you save a remote file, a backup is created locally in the `rsftpback
 ## 📃 License
 
 MIT © 2026 andriy063
+
+[![Donate](https://raw.githubusercontent.com/stefan-niedermann/paypal-donate-button/master/paypal-donate-button.png)](https://www.paypal.com/donate/?hosted_button_id=TZFNL62U3UHAE)
