@@ -405,7 +405,7 @@ async function createFileCommand(item) {
     // Refresh parent
     provider.refresh(item);
     const doc = await vscode.workspace.openTextDocument(local);
-    await vscode.window.showTextDocument(doc);
+    await vscode.window.showTextDocument(doc, { preview: false });
 }
 async function createFolderCommand(item) {
     const name = await vscode.window.showInputBox({ prompt: "New folder name" });
@@ -470,9 +470,9 @@ async function openFileCommand(item) {
         await processQueue(item.data.host, [{ local, remote: item.data.fullPath, type: 'download' }], 1, new vscode.CancellationTokenSource().token, () => { });
     });
     await createBackup(local, item.data.fullPath, item.data.host);
-    // const doc = await vscode.workspace.openTextDocument(local);
-    // await vscode.window.showTextDocument(doc);
-    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(local));
+    //await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(local));
+    const doc = await vscode.workspace.openTextDocument(local);
+    await vscode.window.showTextDocument(doc, { preview: false });
 }
 async function processQueue(host, jobs, workersCount, token, onProgress) {
     const cfg = cfgFor(host);

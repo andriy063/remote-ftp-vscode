@@ -424,7 +424,7 @@ async function createFileCommand(item: RemoteItem) {
   // Refresh parent
   provider.refresh(item);
   const doc = await vscode.workspace.openTextDocument(local);
-  await vscode.window.showTextDocument(doc);
+  await vscode.window.showTextDocument(doc, { preview: false });
 }
 
 async function createFolderCommand(item: RemoteItem) {
@@ -482,9 +482,10 @@ async function openFileCommand(item: RemoteItem) {
   });
 
   await createBackup(local, item.data.fullPath, item.data.host);
-  // const doc = await vscode.workspace.openTextDocument(local);
-  // await vscode.window.showTextDocument(doc);
-  await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(local));
+
+  //await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(local));
+  const doc = await vscode.workspace.openTextDocument(local);
+  await vscode.window.showTextDocument(doc, { preview: false });
 }
 
 /* ------------------------------------------------------------------
